@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emblem – Master Gantt Chart</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #F4F6F8; color: #1A2530; }
+  input, select, button { font-family: inherit; }
+  ::-webkit-scrollbar { height: 6px; width: 6px; }
+  ::-webkit-scrollbar-track { background: #F4F6F8; }
+  ::-webkit-scrollbar-thumb { background: #BDC3C7; border-radius: 3px; }
+  .tab-btn { background: transparent; border: none; padding: 10px 18px; cursor: pointer; font-size: 12px; font-weight: 600; border-radius: 6px 6px 0 0; transition: all 0.15s; color: #9ECFE8; }
+  .tab-btn.active { background: #fff; color: #1A2530; }
+  .tab-btn:hover:not(.active) { background: rgba(255,255,255,0.1); }
+  input[type="date"] { cursor: pointer; }
+  .inline-input { border: none; background: transparent; outline: none; width: 100%; font-family: inherit; color: #1A2530; }
+  .inline-input:focus { background: #EAF4FB; border-radius: 3px; }
+  .cell-input { border: 1px solid #E8ECF0; border-radius: 3px; padding: 3px 6px; font-size: 11px; color: #1A2530; width: 100%; }
+  .cell-input:focus { outline: none; border-color: #2E86AB; }
+  .badge { border-radius: 4px; padding: 2px 7px; font-size: 11px; font-weight: 600; white-space: nowrap; display: inline-block; }
+  .add-btn { background: #2E86AB; color: #fff; border: none; border-radius: 5px; padding: 6px 14px; cursor: pointer; font-size: 12px; font-weight: 600; }
+  .add-btn:hover { background: #1F6A8A; }
+  .ghost-btn { background: none; border: 1px dashed #BDC3C7; border-radius: 4px; padding: 5px 14px; cursor: pointer; color: #7F8C8D; font-size: 11px; margin: 10px; }
+  .ghost-btn:hover { border-color: #2E86AB; color: #2E86AB; }
+  .del-btn { background: none; border: none; cursor: pointer; color: #BDC3C7; font-size: 16px; line-height: 1; padding: 0 4px; }
+  .del-btn:hover { color: #E63946; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { padding: 9px 12px; text-align: left; font-weight: 600; font-size: 11px; }
+  td { padding: 7px 10px; border-bottom: 1px solid #E8ECF0; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useCallback } = React;
+
+// ── Colour tokens ─────────────────────────────────────────────────────────────
+const C = {
+  navy:"#0D1F2D", midNavy:"#1A3A4A", teal:"#2E86AB", tealLight:"#C8EAF5",
+  orange:"#F6AE2D", orangeLight:"#FEF0C7", green:"#3A7D44", greenLight:"#D4EDDA",
+  red:"#E63946", redLight:"#FFCDD2", amber:"#FF8C00", amberLight:"#FFE0B2",
+  purple:"#7B2D8B", purpleLight:"#EDD9F0",
+  grey1:"#F4F6F8", grey2:"#E8ECF0", grey3:"#BDC3C7", grey4:"#7F8C8D",
+  white:"#FFFFFF", text:"#1A2530"
+};
+
+const phaseColor  = type => type==="sd"?C.purple :type==="mfg"?C.teal:C.orange;
+const phaseColorL = type => type==="sd"?C.purpleLight:type==="mfg"?C.tealLight:C.orangeLight;
+const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate()+n); return r; };
+const addWeeks = (d, n) => addDays(d, n*7);
+const toISO = d => d.toISOString().slice(0,10);
+const fromISO = s => new Date(s+"T00:00:00");
+const fmt = d => d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+const fmtMon = d => d.toLocaleDateString("en-GB",{month:"short",year:"numeric"});
+const daysBetween = (a,b) => Math.round((b-a)/86400000);
+const weeksLabel = (s,e) => (Math.round(daysBetween(s,e)/7*10)/10)+"w";
+const nextMon = d => { const r=new Date(d); const day=r.getDay(); r.setDate(r.getDate()+(day===0?1:day===6?2:8-day)); return r; };
+
+const TODAY = (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
+
+// ── Initial data ───────────────────────────────────────────────────────────────
+const INIT_PROJECTS = [
+  { id:"monterey",  name:"Monterey", color:"#2E86AB",
+    phases:[
+      {id:"sd",   label:"Shop Drawings", type:"sd",   start:"2026-04-01", durationWeeks:3, pct:100, team:"Design Team"},
+      {id:"mfg",  label:"Manufacturing", type:"mfg",  start:"2026-05-01", durationWeeks:7, pct:50,  team:"Shop Team A"},
+      {id:"inst", label:"Installation",  type:"inst", start:"2026-06-20", durationWeeks:3, pct:0,   team:"Install Team 1"},
+    ]},
+  { id:"boucher1", name:"Boucher", color:"#7B2D8B",
+    phases:[
+      {id:"sd",   label:"Shop Drawings", type:"sd",   start:"2026-04-06", durationWeeks:3, pct:100, team:"Design Team"},
+      {id:"mfg",  label:"Manufacturing", type:"mfg",  start:"2026-05-04", durationWeeks:7, pct:60,  team:"Shop Team B"},
+      {id:"inst", label:"Installation",  type:"inst", start:"2026-06-08", durationWeeks:4, pct:0,   team:"Install Team 2"},
+    ]},
+  { id:"hilton",   name:"Hilton", color:"#1B6CA8",
+    phases:[
+      {id:"sd",   label:"Shop Drawings", type:"sd",   start:"2026-05-18", durationWeeks:4, pct:60,  team:"Design Team"},
+      {id:"mfg",  label:"Manufacturing", type:"mfg",  start:"2026-06-22", durationWeeks:5, pct:0,   team:"Shop Team A"},
+      {id:"inst", label:"Installation",  type:"inst", start:"2026-08-03", durationWeeks:3, pct:0,   team:"Install Team 1"},
+    ]},
+];
+
+const INIT_TEAMS = {
+  shop:[
+    {id:"sD", name:"Design Team",  lead:"", size:2, members:["",""]},
+    {id:"sA", name:"Shop Team A",  lead:"", size:4, members:["","","",""]},
+    {id:"sB", name:"Shop Team B",  lead:"", size:4, members:["","","",""]},
+    {id:"sC", name:"Shop Team C",  lead:"", size:3, members:["","",""]},
+  ],
+  install:[
+    {id:"i1", name:"Install Team 1", lead:"", size:3, members:["","",""]},
+    {id:"i2", name:"Install Team 2", lead:"", size:3, members:["","",""]},
+    {id:"i3", name:"Install Team 3", lead:"", size:3, members:["","",""]},
+  ]
+};
+
+const INIT_CAP = { shopSlots:3, installSlots:2, totalStaff:22 };
+
+// ── Derived helpers ────────────────────────────────────────────────────────────
+const phaseEnd = ph => addDays(fromISO(ph.start), ph.durationWeeks*7-1);
+
+function buildCols(projects) {
+  let mn = new Date("2026-05-26"), mx = new Date("2026-11-14");
+  projects.forEach(p => p.phases.forEach(ph => {
+    const s=fromISO(ph.start), e=phaseEnd(ph);
+    if(s<mn) mn=new Date(s); if(e>mx) mx=new Date(e);
+  }));
+  mx = addDays(mx, 14);
+  const cols=[]; let d=new Date(mn);
+  while(d<=mx){ if(d.getDay()!==0&&d.getDay()!==6) cols.push(new Date(d)); d=addDays(d,1); }
+  return cols;
+}
+
+function computeOverlaps(projects, cap) {
+  const weeks=[];
+  let d = new Date("2026-06-01");
+  const end = new Date("2026-12-01");
+  while(d<=end){
+    if(d.getDay()===1){
+      const fri=addDays(d,4), mfg=[], inst=[];
+      projects.forEach(p=>p.phases.forEach(ph=>{
+        const s=fromISO(ph.start),e=phaseEnd(ph);
+        if(s<=fri&&e>=d){ if(ph.type==="mfg") mfg.push(p.name); else if(ph.type==="inst") inst.push(p.name); }
+      }));
+      const total=mfg.length+inst.length;
+      const shopOver=mfg.length>cap.shopSlots, instOver=inst.length>cap.installSlots;
+      let flag="ok";
+      if(shopOver||instOver) flag="high";
+      else if(total>=3) flag="warn";
+      weeks.push({mon:new Date(d),fri,mfg,inst,total,flag,shopOver,instOver});
+    }
+    d=addDays(d,1);
+  }
+  return weeks;
+}
+
+// ── Section header ─────────────────────────────────────────────────────────────
+const SH = ({children}) => (
+  <div style={{background:C.midNavy,color:C.white,fontWeight:700,fontSize:11,letterSpacing:"0.07em",textTransform:"uppercase",padding:"8px 14px",borderRadius:"6px 6px 0 0",marginTop:20}}>
+    {children}
+  </div>
+);
+const SB = ({children, style={}}) => (
+  <div style={{border:`1px solid ${C.grey2}`,borderTop:"none",borderRadius:"0 0 6px 6px",...style}}>
+    {children}
+  </div>
+);
+
+// ── localStorage helpers ───────────────────────────────────────────────────────
+const LS_KEY = "emblem_gantt_v1";
+function loadSaved() {
+  try { const d=localStorage.getItem(LS_KEY); return d?JSON.parse(d):null; } catch(e){ return null; }
+}
+function saveToLS(data) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch(e){}
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// APP
+// ══════════════════════════════════════════════════════════════════════════════
+function App() {
+  const saved = loadSaved();
+  const [projects, setProjects] = useState(saved?.projects || INIT_PROJECTS);
+  const [teams, setTeams]       = useState(saved?.teams    || INIT_TEAMS);
+  const [cap, setCap]           = useState(saved?.cap      || INIT_CAP);
+  const [tab, setTab]           = useState("gantt");
+  const [logs, setLogs]         = useState(saved?.logs     || [{date:toISO(TODAY), by:"", type:"monday", notes:""}]);
+  const [lastSaved, setLastSaved] = useState(saved?.savedAt || null);
+  const [saveFlash, setSaveFlash] = useState(false);
+  const [importError, setImportError] = useState(null);
+  const fileInputRef = React.useRef(null);
+
+  // Auto-save whenever data changes
+  React.useEffect(()=>{
+    const data = {projects, teams, cap, logs, savedAt: new Date().toISOString()};
+    saveToLS(data);
+    setLastSaved(data.savedAt);
+  }, [projects, teams, cap, logs]);
+
+  const handleManualSave = () => {
+    const data = {projects, teams, cap, logs, savedAt: new Date().toISOString()};
+    saveToLS(data);
+    setLastSaved(data.savedAt);
+    setSaveFlash(true);
+    setTimeout(()=>setSaveFlash(false), 2000);
+  };
+
+  const handleExport = () => {
+    const data = {projects, teams, cap, logs, savedAt: new Date().toISOString(), version:1};
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "emblem_gantt_data.json"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (e) => {
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if(data.projects) setProjects(data.projects);
+        if(data.teams)    setTeams(data.teams);
+        if(data.cap)      setCap(data.cap);
+        if(data.logs)     setLogs(data.logs);
+        setImportError(null);
+        setSaveFlash(true);
+        setTimeout(()=>setSaveFlash(false), 2500);
+      } catch(err) { setImportError("Could not read file — make sure it's an Emblem export."); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const dateCols = useMemo(()=>buildCols(projects),[projects]);
+  const overlaps = useMemo(()=>computeOverlaps(projects,cap),[projects,cap]);
+
+  const updatePhase = (pid,phid,updates) =>
+    setProjects(prev=>prev.map(p=>p.id!==pid?p:{...p,phases:p.phases.map(ph=>ph.id!==phid?ph:{...ph,...updates})}));
+
+  const allTeamNames = useMemo(()=>{
+    const s=new Set();
+    [...teams.shop,...teams.install].forEach(t=>s.add(t.name));
+    return [...s];
+  },[teams]);
+
+  const todayWeek = overlaps.find(w=>w.mon<=TODAY&&w.fri>=TODAY);
+
+  const TABS = [
+    {id:"update",   label:"✏️ Quick Update"},
+    {id:"gantt",    label:"📊 Gantt Chart"},
+    {id:"capacity", label:"👥 Capacity & Teams"},
+    {id:"overlap",  label:"⚠ Overlap Analysis"},
+    {id:"log",      label:"📝 Update Log"},
+  ];
+
+  const fmtSaved = dt => { if(!dt) return "never"; const d=new Date(dt); return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})+" "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); };
+
+  return (
+    <div style={{minHeight:"100vh",background:C.grey1}}>
+      {/* ── Header ── */}
+      <div style={{background:C.navy,padding:"14px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:800,color:C.white,letterSpacing:"0.05em"}}>EMBLEM</div>
+          <div style={{fontSize:11,color:"#7EB8D0",marginTop:2}}>Master Project Gantt · {fmt(TODAY)}</div>
+          <div style={{fontSize:10,color:saveFlash?"#5FD97A":"#4A7A96",marginTop:2,transition:"color 0.3s"}}>
+            {saveFlash ? "✓ Saved!" : `Auto-saved: ${fmtSaved(lastSaved)}`}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          {/* Save / Export / Import */}
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={handleManualSave}
+              style={{background:saveFlash?"#3A7D44":"#1A3A4A",color:saveFlash?"#fff":C.teal,border:`1px solid ${saveFlash?"#3A7D44":C.teal}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:600,transition:"all 0.3s"}}>
+              {saveFlash?"✓ Saved":"💾 Save"}
+            </button>
+            <button onClick={handleExport}
+              style={{background:"#1A3A4A",color:"#9ECFE8",border:"1px solid #2A5060",borderRadius:5,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:600}}>
+              ⬇ Export
+            </button>
+            <button onClick={()=>fileInputRef.current.click()}
+              style={{background:"#1A3A4A",color:"#9ECFE8",border:"1px solid #2A5060",borderRadius:5,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:600}}>
+              ⬆ Import
+            </button>
+            <input ref={fileInputRef} type="file" accept=".json" onChange={handleImport} style={{display:"none"}}/>
+          </div>
+          {importError && <div style={{color:C.red,fontSize:11}}>{importError}</div>}
+          {[
+            {val:projects.length,          label:"PROJECTS", col:C.teal},
+            {val:todayWeek?.mfg.length??0, label:"IN MFG",   col:C.orange},
+            {val:todayWeek?.inst.length??0, label:"ON SITE",  col:C.green},
+          ].map(({val,label,col})=>(
+            <div key={label} style={{textAlign:"center",background:"#1A3A4A",borderRadius:7,padding:"6px 16px"}}>
+              <div style={{fontSize:22,fontWeight:800,color:col,lineHeight:1}}>{val}</div>
+              <div style={{fontSize:9,color:"#7EB8D0",fontWeight:600,marginTop:2}}>{label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Tabs ── */}
+      <div style={{background:C.midNavy,display:"flex",padding:"0 22px",gap:2}}>
+        {TABS.map(t=>(
+          <button key={t.id} className={`tab-btn${tab===t.id?" active":""}`} onClick={()=>setTab(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Content ── */}
+      <div style={{padding:"20px 22px"}}>
+        {tab==="update"   && <QuickUpdateTab projects={projects} updatePhase={updatePhase} logs={logs} setLogs={setLogs} />}
+        {tab==="gantt"    && <GanttTab    projects={projects} setProjects={setProjects} dateCols={dateCols} updatePhase={updatePhase} allTeamNames={allTeamNames} />}
+        {tab==="capacity" && <CapacityTab projects={projects} teams={teams} setTeams={setTeams} cap={cap} setCap={setCap} overlaps={overlaps} allTeamNames={allTeamNames} />}
+        {tab==="overlap"  && <OverlapTab  overlaps={overlaps} cap={cap} />}
+        {tab==="log"      && <LogTab      logs={logs} setLogs={setLogs} />}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GANTT TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function GanttTab({projects, setProjects, dateCols, updatePhase, allTeamNames}) {
+  const CW = 18; // column width px
+  const todayIdx = dateCols.findIndex(d=>toISO(d)===toISO(TODAY));
+
+  // Month groups for header
+  const monthGroups = useMemo(()=>{
+    const g=[]; let cur=null;
+    dateCols.forEach((d,i)=>{
+      const key=fmtMon(d);
+      if(!cur||cur.label!==key){ cur={label:key,start:i,count:1}; g.push(cur); }
+      else cur.count++;
+    });
+    return g;
+  },[dateCols]);
+
+  const addProject = () => {
+    const id="p_"+Date.now();
+    setProjects(prev=>[...prev,{
+      id, name:"New Project", color:"#4A90D9",
+      phases:[
+        {id:"mfg", label:"Manufacturing",type:"mfg", start:toISO(TODAY),         durationWeeks:5, pct:0, team:"Shop Team A"},
+        {id:"inst",label:"Installation", type:"inst",start:toISO(addWeeks(TODAY,5)),durationWeeks:3, pct:0, team:"Install Team 1"},
+      ]
+    }]);
+  };
+
+  const removeProject = id => setProjects(prev=>prev.filter(p=>p.id!==id));
+
+  const FIXED = 512; // px for left columns
+
+  return (
+    <div>
+      {/* Legend + add button */}
+      <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:12,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:12,fontSize:11,color:C.grey4,flexWrap:"wrap"}}>
+          {[
+            {col:C.green,  label:"Completed"},
+            {col:C.purple, label:"Shop Drawings"},
+            {col:C.teal,   label:"Manufacturing"},
+            {col:C.orange, label:"Installation"},
+          ].map(({col,label})=>(
+            <span key={label} style={{display:"flex",alignItems:"center",gap:4}}>
+              <span style={{display:"inline-block",width:12,height:12,background:col,borderRadius:2}}/>
+              {label}
+            </span>
+          ))}
+          <span style={{display:"flex",alignItems:"center",gap:4}}>
+            <span style={{display:"inline-block",width:2,height:14,background:C.red,borderRadius:1}}/>
+            Today
+          </span>
+        </div>
+        <button className="add-btn" onClick={addProject} style={{marginLeft:"auto"}}>+ Add Project</button>
+      </div>
+
+      {/* Gantt scroll container */}
+      <div style={{overflowX:"auto",border:`1px solid ${C.grey2}`,borderRadius:8,background:C.white}}>
+        <div style={{minWidth: FIXED + dateCols.length*CW}}>
+
+          {/* Month header */}
+          <div style={{display:"flex",background:C.midNavy,position:"sticky",top:0,zIndex:10}}>
+            <div style={{width:FIXED,flexShrink:0,borderRight:`1px solid #2A5060`}}>
+              {["PROJECT","PHASE","TEAM","START","WKS","%"].map((h,i)=>(
+                <span key={h} style={{display:"inline-block",width:[130,130,100,64,36,52][i],padding:"8px 8px",fontSize:10,fontWeight:700,color:C.white,letterSpacing:"0.05em",verticalAlign:"top"}}>
+                  {h}
+                </span>
+              ))}
+            </div>
+            {monthGroups.map((g,i)=>(
+              <div key={i} style={{width:g.count*CW,borderLeft:`1px solid #2A5060`,padding:"8px 6px",fontSize:10,fontWeight:700,color:C.white,letterSpacing:"0.05em",flexShrink:0,overflow:"hidden",whiteSpace:"nowrap"}}>
+                {g.label}
+              </div>
+            ))}
+          </div>
+
+          {/* Day numbers */}
+          <div style={{display:"flex",background:"#112535",borderBottom:`1px solid #1E4060`}}>
+            <div style={{width:FIXED,flexShrink:0}}/>
+            {dateCols.map((d,i)=>{
+              const isT=i===todayIdx, isM=d.getDay()===1;
+              return (
+                <div key={i} style={{width:CW,flexShrink:0,textAlign:"center",fontSize:8,
+                  color:isT?C.red:isM?"#9ECFE8":"#4A7A96",
+                  background:isT?"#250A0A":"transparent",
+                  borderLeft:isM?"1px solid #1E4060":"none",
+                  padding:"3px 0",fontWeight:isT?700:400}}>
+                  {d.getDate()}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Project rows */}
+          {projects.map((proj,pi)=>(
+            <div key={proj.id} style={{borderBottom:`2px solid ${C.grey2}`}}>
+              {proj.phases.map((phase,phi)=>{
+                const pStart=fromISO(phase.start), pEnd=phaseEnd(phase);
+                const rowBg = phi%2===0?C.white:C.grey1;
+                const barColor = phaseColor(phase.type);
+                const barColorL= phaseColorL(phase.type);
+                const bsi = dateCols.findIndex(d=>d>=pStart);
+                const bei = (() => { for(let i=dateCols.length-1;i>=0;i--){ if(dateCols[i]<=pEnd) return i; } return -1; })();
+                const bLeft = bsi>=0 ? bsi*CW : 0;
+                const bWidth= (bsi>=0&&bei>=bsi)?(bei-bsi+1)*CW:0;
+                const doneW = phase.pct>0?Math.round(bWidth*phase.pct/100):0;
+
+                return (
+                  <div key={phase.id} style={{display:"flex",background:rowBg,minHeight:36,alignItems:"stretch"}}>
+                    {/* Project name */}
+                    <div style={{width:130,flexShrink:0,padding:"6px 8px",display:"flex",alignItems:"center",gap:5,borderRight:`1px solid ${C.grey2}`}}>
+                      {phi===0&&(<>
+                        <span style={{width:9,height:9,borderRadius:"50%",background:proj.color,flexShrink:0,display:"inline-block"}}/>
+                        <input className="inline-input" style={{fontWeight:700,fontSize:12}} value={proj.name}
+                          onChange={e=>setProjects(prev=>prev.map(p=>p.id===proj.id?{...p,name:e.target.value}:p))}/>
+                        <button className="del-btn" title="Remove" onClick={()=>setProjects(prev=>prev.filter(p=>p.id!==proj.id))}>×</button>
+                      </>)}
+                    </div>
+                    {/* Phase */}
+                    <div style={{width:130,flexShrink:0,padding:"6px 8px",display:"flex",alignItems:"center",gap:5,borderRight:`1px solid ${C.grey2}`,fontSize:11,color:C.grey4}}>
+                      <span style={{width:8,height:8,borderRadius:2,background:barColor,flexShrink:0,display:"inline-block"}}/>
+                      {phase.label}
+                      {phase.pct>0&&<span style={{color:C.green,fontWeight:700,fontSize:10,marginLeft:3}}>{phase.pct}%</span>}
+                    </div>
+                    {/* Team */}
+                    <div style={{width:100,flexShrink:0,padding:"4px 6px",display:"flex",alignItems:"center",borderRight:`1px solid ${C.grey2}`}}>
+                      <select className="cell-input" value={phase.team}
+                        onChange={e=>updatePhase(proj.id,phase.id,{team:e.target.value})}>
+                        {allTeamNames.map(t=><option key={t}>{t}</option>)}
+                        <option>Subcontractor</option>
+                      </select>
+                    </div>
+                    {/* Start date */}
+                    <div style={{width:64,flexShrink:0,padding:"4px 4px",display:"flex",alignItems:"center",borderRight:`1px solid ${C.grey2}`}}>
+                      <input type="date" className="cell-input" value={phase.start}
+                        onChange={e=>updatePhase(proj.id,phase.id,{start:e.target.value})}
+                        style={{padding:"2px 3px",fontSize:10}}/>
+                    </div>
+                    {/* Duration */}
+                    <div style={{width:36,flexShrink:0,padding:"4px 3px",display:"flex",alignItems:"center",borderRight:`1px solid ${C.grey2}`}}>
+                      <input type="number" className="cell-input" min={1} max={52} value={phase.durationWeeks}
+                        onChange={e=>updatePhase(proj.id,phase.id,{durationWeeks:Math.max(1,parseInt(e.target.value)||1)})}
+                        style={{textAlign:"center",padding:"2px 2px",fontSize:11}}/>
+                    </div>
+                    {/* % Complete slider */}
+                    <div style={{width:52,flexShrink:0,padding:"4px 5px",display:"flex",flexDirection:"column",justifyContent:"center",borderRight:`1px solid ${C.grey2}`,gap:2}}>
+                      <input type="range" min={0} max={100} step={5} value={phase.pct}
+                        onChange={e=>updatePhase(proj.id,phase.id,{pct:parseInt(e.target.value)})}
+                        style={{width:"100%",accentColor:phase.pct===100?"#3A7D44":phaseColor(phase.type),cursor:"pointer"}}/>
+                      <div style={{textAlign:"center",fontSize:9,fontWeight:700,color:phase.pct===100?"#3A7D44":phase.pct>0?C.navy:C.grey3}}>
+                        {phase.pct}%
+                      </div>
+                    </div>
+                    {/* Bar area */}
+                    <div style={{flex:1,position:"relative",overflow:"hidden"}}>
+                      {/* Week dividers */}
+                      {dateCols.map((d,i)=>d.getDay()===1&&(
+                        <div key={i} style={{position:"absolute",left:i*CW,top:0,bottom:0,borderLeft:`1px solid ${C.grey2}`,pointerEvents:"none"}}/>
+                      ))}
+                      {/* Today line */}
+                      {todayIdx>=0&&(
+                        <div style={{position:"absolute",left:todayIdx*CW+CW/2,top:0,bottom:0,borderLeft:`2px solid ${C.red}`,pointerEvents:"none",zIndex:3}}/>
+                      )}
+                      {/* Bar */}
+                      {bWidth>0&&(
+                        <div style={{position:"absolute",left:bLeft,top:7,height:22,width:bWidth,borderRadius:4,overflow:"hidden",display:"flex"}}>
+                          {/* Completed portion (green) */}
+                          {doneW>0&&<div style={{width:doneW,height:"100%",background:"#3A7D44",flexShrink:0}}/>}
+                          {/* Remaining portion (solid bar colour) */}
+                          <div style={{flex:1,height:"100%",background:barColor,opacity:0.85}}/>
+                          {/* Label overlay */}
+                          {bWidth>50&&(
+                            <div style={{position:"absolute",left:6,top:0,bottom:0,display:"flex",alignItems:"center",fontSize:9,fontWeight:600,color:"#fff",whiteSpace:"nowrap",pointerEvents:"none",zIndex:2,textShadow:"0 1px 2px rgba(0,0,0,0.4)"}}>
+                              {fmt(pStart)} → {fmt(pEnd)} · {weeksLabel(pStart,pEnd)}
+                              {phase.pct>0&&<span style={{marginLeft:5,background:"rgba(0,0,0,0.2)",borderRadius:3,padding:"0 4px"}}>{phase.pct}% done</span>}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Completion summary cards */}
+      <div style={{marginTop:16,display:"flex",gap:10,flexWrap:"wrap"}}>
+        {projects.map(proj=>{
+          const last=proj.phases[proj.phases.length-1];
+          const end=phaseEnd(last);
+          const daysLeft=daysBetween(TODAY,end);
+          return (
+            <div key={proj.id} style={{background:C.white,border:`1px solid ${C.grey2}`,borderLeft:`4px solid ${proj.color}`,borderRadius:6,padding:"10px 14px",minWidth:160}}>
+              <div style={{fontWeight:700,fontSize:12,color:C.text,marginBottom:4}}>{proj.name}</div>
+              <div style={{fontSize:11,color:C.grey4}}>Completes <span style={{color:C.navy,fontWeight:600}}>{fmt(end)}</span></div>
+              <div style={{fontSize:11,color:daysLeft<0?C.red:C.grey4,marginTop:2}}>
+                {daysLeft<0?`${Math.abs(daysLeft)}d overdue`:`${daysLeft}d remaining`}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CAPACITY TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function CapacityTab({projects, teams, setTeams, cap, setCap, overlaps}) {
+  const hotWeeks = overlaps.filter(w=>w.flag!=="ok");
+
+  const updateTeam = (type,id,field,val) =>
+    setTeams(prev=>({...prev,[type]:prev[type].map(t=>t.id!==id?t:{...t,[field]:val})}));
+
+  const addTeam = type => {
+    const id=type+"_"+Date.now();
+    setTeams(prev=>({...prev,[type]:[...prev[type],{id,name:"New Team",lead:"",size:3,members:["","",""]}]}));
+  };
+
+  const removeTeam = (type,id) =>
+    setTeams(prev=>({...prev,[type]:prev[type].filter(t=>t.id!==id)}));
+
+  return (
+    <div>
+      {/* Settings */}
+      <SH>Business Capacity Settings</SH>
+      <SB style={{padding:16,background:C.white}}>
+        <div style={{display:"flex",gap:28,flexWrap:"wrap"}}>
+          {[
+            {label:"Max Concurrent Shop Jobs",    key:"shopSlots"},
+            {label:"Max Concurrent Install Teams",key:"installSlots"},
+            {label:"Total Employees on Payroll",  key:"totalStaff"},
+          ].map(({label,key})=>(
+            <label key={key} style={{display:"flex",flexDirection:"column",gap:5,fontSize:11}}>
+              <span style={{color:C.grey4,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</span>
+              <input type="number" min={1} value={cap[key]}
+                onChange={e=>setCap(prev=>({...prev,[key]:parseInt(e.target.value)||1}))}
+                style={{width:75,padding:"6px 10px",border:`2px solid ${C.grey2}`,borderRadius:5,fontSize:16,fontWeight:700,color:C.navy,textAlign:"center"}}/>
+            </label>
+          ))}
+        </div>
+      </SB>
+
+      {/* Teams */}
+      {[{type:"shop",label:"Manufacturing Shop Teams"},{type:"install",label:"Installation Teams"}].map(({type,label})=>(
+        <div key={type}>
+          <SH>{label}</SH>
+          <SB style={{background:C.white}}>
+            {teams[type].map((t,i)=>{
+              const assigned = projects
+                .flatMap(p=>p.phases.filter(ph=>ph.team===t.name).map(()=>p.name))
+                .join(", ") || "—";
+              const members = t.members || [];
+
+              const updateMember = (mi, val) => {
+                const newMembers = [...members];
+                newMembers[mi] = val;
+                updateTeam(type, t.id, "members", newMembers);
+              };
+
+              const addMember = () => {
+                const newMembers = [...members, ""];
+                updateTeam(type, t.id, "members", newMembers);
+                updateTeam(type, t.id, "size", newMembers.length);
+              };
+
+              const removeMember = mi => {
+                const newMembers = members.filter((_,idx)=>idx!==mi);
+                updateTeam(type, t.id, "members", newMembers);
+                updateTeam(type, t.id, "size", Math.max(1, newMembers.length));
+              };
+
+              return (
+                <div key={t.id} style={{borderBottom:`1px solid ${C.grey2}`,background:i%2===0?C.white:C.grey1}}>
+                  {/* Team header row */}
+                  <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",flexWrap:"wrap"}}>
+                    {/* Colour dot */}
+                    <div style={{width:10,height:10,borderRadius:"50%",background:type==="shop"?C.teal:C.orange,flexShrink:0}}/>
+                    {/* Name */}
+                    <input className="inline-input" style={{fontWeight:700,fontSize:13,minWidth:120,maxWidth:180}}
+                      value={t.name} onChange={e=>updateTeam(type,t.id,"name",e.target.value)}/>
+                    {/* Lead */}
+                    <div style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.grey4}}>
+                      <span style={{fontWeight:600,whiteSpace:"nowrap"}}>Lead:</span>
+                      <input className="inline-input" value={t.lead} placeholder="—"
+                        style={{fontSize:11,minWidth:80,maxWidth:140}}
+                        onChange={e=>updateTeam(type,t.id,"lead",e.target.value)}/>
+                    </div>
+                    {/* Assigned */}
+                    <div style={{fontSize:11,color:assigned==="—"?C.grey3:C.navy,fontStyle:assigned==="—"?"italic":"normal",marginLeft:4}}>
+                      {assigned!=="—"&&<span style={{color:C.grey4,marginRight:4}}>On:</span>}
+                      {assigned}
+                    </div>
+                    {/* Headcount badge */}
+                    <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{background:type==="shop"?C.tealLight:C.orangeLight,color:type==="shop"?C.teal:"#9C6000",borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:700}}>
+                        {members.length} {members.length===1?"person":"people"}
+                      </span>
+                      <button className="del-btn" onClick={()=>removeTeam(type,t.id)} title="Remove team">×</button>
+                    </div>
+                  </div>
+
+                  {/* Members grid */}
+                  <div style={{padding:"4px 14px 12px 34px",display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+                    {members.map((m,mi)=>(
+                      <div key={mi} style={{display:"flex",alignItems:"center",background:C.grey1,border:`1px solid ${C.grey2}`,borderRadius:20,padding:"3px 4px 3px 10px",gap:4}}>
+                        <span style={{fontSize:10,color:C.grey4,fontWeight:600,marginRight:2}}>#{mi+1}</span>
+                        <input
+                          value={m}
+                          placeholder="Member name"
+                          onChange={e=>updateMember(mi,e.target.value)}
+                          style={{border:"none",background:"transparent",outline:"none",fontSize:12,color:C.text,width:110,fontFamily:"inherit"}}
+                        />
+                        <button onClick={()=>removeMember(mi)}
+                          style={{background:"none",border:"none",cursor:"pointer",color:C.grey3,fontSize:13,lineHeight:1,padding:"0 2px"}}
+                          title="Remove member">×</button>
+                      </div>
+                    ))}
+                    <button onClick={addMember}
+                      style={{background:"none",border:`1px dashed ${C.grey3}`,borderRadius:20,padding:"3px 12px",cursor:"pointer",color:C.grey4,fontSize:11}}>
+                      + Add member
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            <button className="ghost-btn" onClick={()=>addTeam(type)}>+ Add Team</button>
+          </SB>
+        </div>
+      ))}
+
+      {/* Capacity alerts */}
+      <SH>⚠ Capacity Pressure Weeks</SH>
+      <SB>
+        {hotWeeks.length===0?(
+          <div style={{padding:"16px 18px",color:C.green,fontWeight:600,fontSize:13,background:C.greenLight}}>
+            ✅ No capacity pressure detected — all projects within your set limits.
+          </div>
+        ):(
+          <table>
+            <thead>
+              <tr style={{background:C.grey1}}>
+                {["Week","Shop Jobs","Install Jobs","Total","Status"].map(h=>(
+                  <th key={h} style={{color:C.grey4,borderBottom:`1px solid ${C.grey2}`}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {hotWeeks.map((w,i)=>{
+                const isH=w.flag==="high";
+                const bg=isH?C.redLight:C.amberLight;
+                return (
+                  <tr key={i} style={{background:bg}}>
+                    <td style={{fontWeight:600}}>{fmt(w.mon)}</td>
+                    <td>
+                      <span style={{color:w.shopOver?C.red:C.text,fontWeight:w.shopOver?700:400}}>
+                        {w.shopOver?"⚠ ":""}{w.mfg.length} active
+                      </span>
+                      {w.mfg.length>0&&<span style={{fontSize:10,color:C.grey4,marginLeft:5}}>({w.mfg.join(", ")})</span>}
+                    </td>
+                    <td>
+                      <span style={{color:w.instOver?C.red:C.text,fontWeight:w.instOver?700:400}}>
+                        {w.instOver?"⚠ ":""}{w.inst.length} active
+                      </span>
+                      {w.inst.length>0&&<span style={{fontSize:10,color:C.grey4,marginLeft:5}}>({w.inst.join(", ")})</span>}
+                    </td>
+                    <td style={{fontWeight:700,fontSize:15,color:isH?C.red:C.navy}}>{w.total}</td>
+                    <td>
+                      <span className="badge" style={{background:isH?"#FFEBEE":C.amberLight,color:isH?C.red:C.amber}}>
+                        {isH?"🔴 High Pressure":"🟡 Watch"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </SB>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// OVERLAP TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function OverlapTab({overlaps, cap}) {
+  const active = overlaps.filter(w=>w.total>0);
+  const maxLoad = Math.max(...active.map(w=>w.total), 1);
+
+  return (
+    <div>
+      <p style={{fontSize:12,color:C.grey4,marginBottom:12}}>
+        Live overlap analysis — updates instantly when you change any date on the Gantt.
+        Capacity limits: <strong>{cap.shopSlots} shop slots</strong> · <strong>{cap.installSlots} install teams</strong>.
+      </p>
+
+      {/* Bar chart */}
+      <SH>Weekly Load Chart</SH>
+      <SB style={{padding:"16px 16px 12px",background:C.white}}>
+        <div style={{display:"flex",flexWrap:"wrap",gap:3,alignItems:"flex-end"}}>
+          {active.map((w,i)=>{
+            const shopH = Math.round((w.mfg.length/Math.max(cap.shopSlots,1))*50);
+            const instH = Math.round((w.inst.length/Math.max(cap.installSlots,1))*50);
+            const isH=w.flag==="high", isW=w.flag==="warn";
+            return (
+              <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}} title={`${fmt(w.mon)}: ${w.mfg.length} shop, ${w.inst.length} install`}>
+                <div style={{display:"flex",gap:2,alignItems:"flex-end",height:54}}>
+                  <div style={{width:12,height:Math.max(2,shopH),background:w.shopOver?C.red:C.teal,borderRadius:"2px 2px 0 0",alignSelf:"flex-end"}}/>
+                  <div style={{width:12,height:Math.max(2,instH),background:w.instOver?C.red:C.orange,borderRadius:"2px 2px 0 0",alignSelf:"flex-end"}}/>
+                </div>
+                <div style={{fontSize:8,color:C.grey4,whiteSpace:"nowrap"}}>
+                  {w.mon.toLocaleDateString("en-GB",{day:"2-digit",month:"2-digit"})}
+                </div>
+                {(isH||isW)&&<div style={{fontSize:8,color:isH?C.red:C.amber,fontWeight:700}}>{isH?"🔴":"🟡"}</div>}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{marginTop:10,fontSize:10,color:C.grey4,display:"flex",gap:14}}>
+          <span><span style={{display:"inline-block",width:10,height:10,background:C.teal,borderRadius:2,marginRight:4}}/>Shop (vs {cap.shopSlots} slots)</span>
+          <span><span style={{display:"inline-block",width:10,height:10,background:C.orange,borderRadius:2,marginRight:4}}/>Install (vs {cap.installSlots} teams)</span>
+          <span><span style={{display:"inline-block",width:10,height:10,background:C.red,borderRadius:2,marginRight:4}}/>Over capacity</span>
+        </div>
+      </SB>
+
+      {/* Table */}
+      <SH>Week-by-Week Breakdown</SH>
+      <SB>
+        <table>
+          <thead>
+            <tr style={{background:C.midNavy}}>
+              {["Week Starting","Manufacturing Active","Installation Active","Total","Status"].map(h=>(
+                <th key={h} style={{color:C.white}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {active.map((w,i)=>{
+              const isH=w.flag==="high", isW=w.flag==="warn";
+              const bg=isH?C.redLight:isW?C.amberLight:i%2===0?C.white:C.grey1;
+              return (
+                <tr key={i} style={{background:bg}}>
+                  <td style={{fontWeight:600}}>{fmt(w.mon)}</td>
+                  <td>
+                    {w.mfg.length===0?<span style={{color:C.grey3}}>—</span>:(
+                      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                        {w.mfg.map(n=><span key={n} className="badge" style={{background:C.tealLight,color:C.teal}}>{n}</span>)}
+                        {w.shopOver&&<span className="badge" style={{background:C.redLight,color:C.red}}>Over limit!</span>}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {w.inst.length===0?<span style={{color:C.grey3}}>—</span>:(
+                      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                        {w.inst.map(n=><span key={n} className="badge" style={{background:C.orangeLight,color:"#9C6000"}}>{n}</span>)}
+                        {w.instOver&&<span className="badge" style={{background:C.redLight,color:C.red}}>Over limit!</span>}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{fontWeight:700,fontSize:15,color:isH?C.red:C.navy}}>{w.total}</td>
+                  <td>
+                    {isH&&<span className="badge" style={{background:"#FFEBEE",color:C.red}}>🔴 High Load</span>}
+                    {isW&&<span className="badge" style={{background:C.amberLight,color:C.amber}}>🟡 Monitor</span>}
+                    {!isH&&!isW&&<span className="badge" style={{background:C.greenLight,color:C.green}}>✓ OK</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </SB>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// LOG TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function LogTab({logs, setLogs}) {
+  const add = () => setLogs(prev=>[{date:toISO(TODAY),by:"",type:"monday",notes:""},...prev]);
+  const upd = (i,field,val) => setLogs(prev=>prev.map((l,li)=>li!==i?l:{...l,[field]:val}));
+  const del = i => setLogs(prev=>prev.filter((_,li)=>li!==i));
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <p style={{fontSize:12,color:C.grey4}}>Record status every Monday and Friday. Keep a running history of project progress.</p>
+        <button className="add-btn" onClick={add}>+ New Entry</button>
+      </div>
+      <div style={{border:`1px solid ${C.grey2}`,borderRadius:8,overflow:"hidden"}}>
+        <table>
+          <thead>
+            <tr style={{background:C.midNavy}}>
+              {["Date","Updated By","Type","Status Notes",""].map(h=>(
+                <th key={h} style={{color:C.white}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {logs.map((log,i)=>(
+              <tr key={i} style={{background:i%2===0?C.white:C.grey1}}>
+                <td style={{width:130}}>
+                  <input type="date" className="cell-input" value={log.date} onChange={e=>upd(i,"date",e.target.value)}/>
+                </td>
+                <td style={{width:120}}>
+                  <input className="cell-input" value={log.by} placeholder="Your name" onChange={e=>upd(i,"by",e.target.value)}/>
+                </td>
+                <td style={{width:100}}>
+                  <select className="cell-input" value={log.type} onChange={e=>upd(i,"type",e.target.value)}>
+                    <option value="monday">Monday</option>
+                    <option value="friday">Friday</option>
+                    <option value="adhoc">Ad-hoc</option>
+                  </select>
+                </td>
+                <td>
+                  <input className="cell-input" value={log.notes} placeholder="e.g. Monterey mfg 60%, Hilton drawings received..." onChange={e=>upd(i,"notes",e.target.value)}/>
+                </td>
+                <td style={{width:30}}><button className="del-btn" onClick={()=>del(i)}>×</button></td>
+              </tr>
+            ))}
+            {logs.length===0&&(
+              <tr><td colSpan={5} style={{textAlign:"center",color:C.grey3,padding:20,fontStyle:"italic"}}>No entries yet — click + New Entry to start.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// QUICK UPDATE TAB
+// ══════════════════════════════════════════════════════════════════════════════
+function QuickUpdateTab({projects, updatePhase, logs, setLogs}) {
+  const [updater, setUpdater] = useState("");
+  const [updateType, setUpdateType] = useState(()=>{
+    const day = new Date().getDay();
+    return day===1?"monday":day===5?"friday":"adhoc";
+  });
+  const [notes, setNotes] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const handleSaveLog = () => {
+    if(!notes && !updater) return;
+    setLogs(prev=>[{date:toISO(TODAY), by:updater, type:updateType, notes}, ...prev]);
+    setSaved(true);
+    setTimeout(()=>setSaved(false), 2500);
+    setNotes("");
+  };
+
+  const statusColour = pct =>
+    pct===100 ? "#3A7D44" : pct>=75 ? "#2E86AB" : pct>=40 ? C.orange : pct>0 ? C.amber : C.grey3;
+
+  const statusLabel = pct =>
+    pct===100?"✅ Complete":pct>=75?"🔵 Nearly done":pct>=40?"🟠 In progress":pct>0?"🟡 Early stages":"⬜ Not started";
+
+  return (
+    <div style={{maxWidth:780}}>
+      {/* Who's updating */}
+      <div style={{background:C.white,border:`1px solid ${C.grey2}`,borderRadius:8,padding:18,marginBottom:16,display:"flex",gap:16,alignItems:"flex-end",flexWrap:"wrap"}}>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:11,fontWeight:600,color:C.grey4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Updated by</label>
+          <input className="cell-input" value={updater} placeholder="Your name (e.g. Luke / Dan)"
+            onChange={e=>setUpdater(e.target.value)}
+            style={{width:180,fontSize:13,padding:"6px 10px"}}/>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <label style={{fontSize:11,fontWeight:600,color:C.grey4,textTransform:"uppercase",letterSpacing:"0.05em"}}>Update type</label>
+          <select className="cell-input" value={updateType} onChange={e=>setUpdateType(e.target.value)}
+            style={{width:130,fontSize:13,padding:"6px 10px"}}>
+            <option value="monday">Monday check-in</option>
+            <option value="friday">Friday check-in</option>
+            <option value="adhoc">Ad-hoc update</option>
+          </select>
+        </div>
+        <div style={{fontSize:12,color:C.grey4,paddingBottom:8}}>
+          📅 {TODAY.toLocaleDateString("en-GB",{weekday:"long",day:"2-digit",month:"long",year:"numeric"})}
+        </div>
+      </div>
+
+      {/* Project sliders */}
+      <SH>Update Project Progress</SH>
+      <SB style={{background:C.white,padding:0}}>
+        {projects.map((proj,pi)=>(
+          <div key={proj.id} style={{borderBottom:pi<projects.length-1?`1px solid ${C.grey2}`:"none",padding:"16px 18px"}}>
+            {/* Project title */}
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:proj.color}}/>
+              <div style={{fontWeight:700,fontSize:14,color:C.text}}>{proj.name}</div>
+            </div>
+            {/* Phase sliders */}
+            <div style={{display:"flex",flexDirection:"column",gap:10,paddingLeft:18}}>
+              {proj.phases.map(phase=>{
+                const pStart=fromISO(phase.start), pEnd=phaseEnd(phase);
+                const barColor = phaseColor(phase.type);
+                const isActive = pStart<=TODAY && pEnd>=TODAY;
+                const isPast   = pEnd<TODAY;
+                const isFuture = pStart>TODAY;
+                return (
+                  <div key={phase.id} style={{background:isActive?C.grey1:C.white,border:`1px solid ${isActive?barColor:C.grey2}`,borderRadius:8,padding:"12px 14px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                      <span style={{width:8,height:8,borderRadius:2,background:barColor,display:"inline-block",flexShrink:0}}/>
+                      <span style={{fontWeight:600,fontSize:12,color:C.text}}>{phase.label}</span>
+                      {isActive&&<span style={{fontSize:10,background:barColor,color:"#fff",borderRadius:10,padding:"1px 7px",fontWeight:600}}>ACTIVE NOW</span>}
+                      {isPast&&<span style={{fontSize:10,background:C.grey2,color:C.grey4,borderRadius:10,padding:"1px 7px"}}>Past</span>}
+                      {isFuture&&<span style={{fontSize:10,background:C.amberLight,color:C.amber,borderRadius:10,padding:"1px 7px",fontWeight:600}}>Upcoming</span>}
+                      <span style={{marginLeft:"auto",fontSize:11,color:statusColour(phase.pct),fontWeight:600}}>{statusLabel(phase.pct)}</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:12}}>
+                      {/* Progress bar track */}
+                      <div style={{flex:1,height:20,background:C.grey2,borderRadius:10,overflow:"hidden",position:"relative",cursor:"pointer"}}>
+                        <div style={{width:`${phase.pct}%`,height:"100%",background:phase.pct===100?"#3A7D44":barColor,borderRadius:10,transition:"width 0.2s"}}/>
+                        <input type="range" min={0} max={100} step={5} value={phase.pct}
+                          onChange={e=>updatePhase(proj.id,phase.id,{pct:parseInt(e.target.value)})}
+                          style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",margin:0}}/>
+                      </div>
+                      {/* Number input */}
+                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                        <input type="number" min={0} max={100} value={phase.pct}
+                          onChange={e=>updatePhase(proj.id,phase.id,{pct:Math.min(100,Math.max(0,parseInt(e.target.value)||0))})}
+                          style={{width:52,border:`1px solid ${C.grey2}`,borderRadius:5,padding:"4px 6px",fontSize:14,fontWeight:700,textAlign:"center",color:statusColour(phase.pct)}}/>
+                        <span style={{fontSize:12,color:C.grey4,fontWeight:600}}>%</span>
+                      </div>
+                    </div>
+                    <div style={{marginTop:5,fontSize:10,color:C.grey4}}>
+                      {fmt(pStart)} → {fmt(pEnd)} · {phase.team}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </SB>
+
+      {/* Log note */}
+      <SH>Add a Note to the Update Log</SH>
+      <SB style={{background:C.white,padding:16}}>
+        <textarea value={notes} onChange={e=>setNotes(e.target.value)}
+          placeholder="e.g. Monterey mfg on track, Boucher slightly delayed waiting on materials..."
+          style={{width:"100%",minHeight:72,border:`1px solid ${C.grey2}`,borderRadius:6,padding:"10px 12px",fontSize:12,fontFamily:"inherit",resize:"vertical",outline:"none",color:C.text}}/>
+        <div style={{marginTop:10,display:"flex",alignItems:"center",gap:12}}>
+          <button onClick={handleSaveLog}
+            style={{background:saved?"#3A7D44":C.teal,color:"#fff",border:"none",borderRadius:6,padding:"8px 20px",cursor:"pointer",fontSize:13,fontWeight:700,transition:"background 0.3s"}}>
+            {saved?"✓ Logged!":"Save to Update Log"}
+          </button>
+          {saved&&<span style={{color:"#3A7D44",fontSize:12,fontWeight:600}}>Entry added to the Update Log tab ✓</span>}
+        </div>
+      </SB>
+    </div>
+  );
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────────
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
